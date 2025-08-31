@@ -1,0 +1,333 @@
+{
+   "nodes": [
+     {
+      "parameters": {
+        "model": "ai21/jamba-mini-1.7",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        128,
+        176
+      ],
+      "id": "8ad4eff0-a00d-4ac7-bedf-1a8cfe3cb1f9",
+      "name": "Language Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "qo812UtyvU2lL26v",
+          "name": "OpenRouter account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "/pulse-ai",
+        "responseMode": "lastNode",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -96,
+        -144
+      ],
+      "id": "6873d053-f199-45ed-afa5-30780de8490d",
+      "name": "Webhook Listener",
+      "webhookId": "cb7a50a6-9267-43c0-85fb-fccea2e3bbdf"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a query parser. Extract:\n- topic\n- region\n- timeframe and if no time specified return the current dont let timeframe be empty\nfrom this text: {{$json.body.query}} \nReturn JSON { \"topic\": \"...\", \"region\": \"...\", \"timeframe\": \"...\" }.   or if not return json  { \"topic\": \"...\", \"region\":\"...\", \"timeframe\": \"...\" }.    from   {{ $json.chatInput }}\n",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        128,
+        -144
+      ],
+      "id": "0a521731-9777-4a6f-89f3-63df44b7e20e",
+      "name": "Intent Extractor"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Raw output from AI agent\nlet raw = $json.output || \"{}\";\n\n// Extract JSON block between ```json and ```\nlet match = raw.match(/```json([\\s\\S]*?)```/);\nif (match) {\n  raw = match[1].trim();\n}\n\n// Try parsing\nlet parsed = {};\ntry {\n  parsed = JSON.parse(raw);\n} catch (e) {\n  parsed = {};\n}\n\n// Extract values\nconst topic = parsed.topic ?? \"\";\nconst region = parsed.region ?? \"\";\nlet timeframe = parsed.timeframe ?? \"\";\n\n// Convert timeframe into Google News \"when:\" filter\nlet whenFilter = \"\";\nif (timeframe) {\n  const date = new Date(timeframe);\n  if (!isNaN(date.getTime())) {\n    const now = new Date();\n    const diffDays = Math.floor((now - date) / (1000 * 60 * 60 * 24));\n    if (diffDays <= 1) {\n      whenFilter = \"when:1d\";\n    } else if (diffDays <= 7) {\n      whenFilter = \"when:7d\";\n    } else if (diffDays <= 30) {\n      whenFilter = \"when:1m\";\n    }\n  }\n}\n\n// Build query\nconst parts = [topic, region, whenFilter].filter(p => p && p.trim() !== \"\");\nconst query = encodeURIComponent(parts.join(\" \"));\n\n// Return RSS URL\nreturn [\n  {\n    json: {\n      url: `http://news.google.com/rss/search?q=${query}&hl=en&gl=US&ceid=US:en`\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        -144
+      ],
+      "id": "9c3836f1-329a-4b20-8ba0-487aafeca9ff",
+      "name": "Query Builder"
+    },
+    {
+      "parameters": {
+        "url": "= {{ $json.url }}",
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          },
+          "proxy": "http://brd-customer-hl_2ad44842-zone-web_unlocker1:0yk4pps8a1wc@brd.superproxy.io:33335"
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        656,
+        -144
+      ],
+      "id": "14949366-a117-4fb9-9848-4a6e6d31141f",
+      "name": "News Fetcher"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.xml",
+      "typeVersion": 1,
+      "position": [
+        832,
+        -144
+      ],
+      "id": "b6d82e8d-11d8-48f8-9d0a-d1c11b1300cf",
+      "name": "RSS Parser"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Defensive parsing (so no crash if structure is missing)\nconst channel = items[0].json?.rss?.channel || {};\nconst entries = channel.item || [];\n\n// Helper to clean HTML from description\nfunction cleanSnippet(html) {\n  if (!html) return \"\";\n  return html.replace(/<[^>]*>/g, \"\").replace(/\\s+/g, \" \").trim();\n}\n\nreturn entries.map(e => ({\n  json: {\n    Headline: Array.isArray(e.title) ? e.title.join(\"\") : e.title || \"\",\n    Link: Array.isArray(e.link) ? e.link.join(\"\") : e.link || \"\",\n    Snippet: cleanSnippet(\n      Array.isArray(e.description) ? e.description.join(\"\") : e.description || \"\"\n    )\n  }\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        -144
+      ],
+      "id": "1b9d1921-adc1-4f93-8392-b48a4f173c1c",
+      "name": "Article Cleaner",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const articles = items.map(i => i.json);\nconst summaries = articles.map((a, i) => \n  `${i+1}. ${a.Headline}\\n${a.Snippet}\\nLink: ${a.Link}`\n);\n\nreturn [{\n  json: {\n    combinedNews: summaries.join(\"\\n\\n\")\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1280,
+        -144
+      ],
+      "id": "a0154ba8-9fc2-4ebb-aa59-a2bbe8727c78",
+      "name": "News Aggregator"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are an intelligence analyst AI. Your task is to analyze the combined news text provided and return a structured JSON response. \n\nRequirements:\n\n1. **Input:** You will receive a single string containing all news articles, including headlines, snippets, and links. Example field: {{combinedNews}}.\n\n2. **Output:** You must return **only valid JSON** with the exact fields below. No extra text, no Markdown fences, no explanations. The output must be parseable as JSON.\n\n{\n  \"facts\": [\"fact 1\", \"fact 2\", \"fact 3\"],\n  \"trend\": \"emerging trend\",\n  \"prediction\": \"near-future outcome\",\n  \"tone\": \"requested tone\",\n  \"timestamp\": \"current UTC ISO string\",\n  \"business Suggestion\" :\"think outside the box atleast 3business idea according to trend , facts and make an income business will be runned to generate more money according to your prediction (and remember you're an intellicence analyst (deep thinker than any one) focused and experienced in business only where every topic (i.e fact ,trend and prediction) given with your intellicence you find out how to turn it into business concept like :\ntopic is religion and to change it into business concept of how generating money strategies ) and prvide the possible way to generate money obstacles to face competitors according to your search accross the global web and how investor will get in touch on you monthly income ,annual income, tax payment ,clients, possible time of your business to become famous all needed (materials,needs,wants) and considering all this things according to the geographical location and decide workers you need tech needed to run your business globally\nfor each business you specified\",\n \"convincing point\": \"the reason tu run that business suggested for each \"\n}\n\n3. **Details:**\n   - `facts`: Extract exactly 3 critical points from the combined news text.\n   - `trend`: Identify 1 emerging trend based on the content and global context.\n   - `prediction`: Provide 1 near-future outcome based solely on the combined news text.\n   - `tone`: Match the requested tone (executive briefing, journalistic, casual digest, etc.).\n   - `timestamp`: Use the current UTC time in ISO 8601 format.\n\n4. **Important rules:**\n   - Do **not** invent facts or articles.\n   - Do **not** include commentary, explanation, or Markdown.\n   - Output must be strict JSON that can be parsed directly.\n\nUse the following combined news text exactly:\n\n {{ $json.combinedNews }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        592,
+        64
+      ],
+      "id": "c691c0f4-74ff-456d-a376-ba4313202de3",
+      "name": "Intel Analyst"
+    },
+    {
+      "parameters": {
+        "jsCode": "let raw = $json.output || \"{}\";\n\n// Remove ```json and ``` if present\nraw = raw.replace(/```json|```/g, \"\").trim();\n\n// Parse safely\nlet data;\ntry {\n  data = JSON.parse(raw);\n} catch (err) {\n  data = {};\n}\n\n// Return clean JSON for HTTP Request\nreturn [\n  {\n    json: data\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        64
+      ],
+      "id": "3fab6945-4d32-4f22-a76a-4ddb765c42fd",
+      "name": "JSON Sanitizer"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = items[0].json;\n\n// Helper: print only if value exists\nfunction section(label, val) {\n  if (!val || (Array.isArray(val) && val.length === 0)) return \"\";\n  if (Array.isArray(val)) {\n    return `\\n${label}\\n${val.map((v,i)=>`${i+1}. ${v}`).join(\"\\n\")}\\n`;\n  }\n  return `\\n${label}\\n${val}\\n`;\n}\n\nlet output = `\n📊 Intel Report\n━━━━━━━━━━━━━━━━━━━━━━━\n`;\n\noutput += section(\"📝 Facts\", data.facts);\noutput += section(\"📈 Trend\", data.trend);\noutput += section(\"🔮 Prediction\", data.prediction);\noutput += section(\"🎙️ Tone\", data.tone);\n\nif (data[\"business Suggestion\"] && data[\"business Suggestion\"].length > 0) {\n  output += `\\n💡 Business Suggestions\\n`;\n  data[\"business Suggestion\"].forEach((b, i) => {\n    output += `\\n${i+1}. ${b.business_idea}\\n`;\n\n    output += section(\"Income Generation\", b.income_strategy);\n    output += section(\"Monthly Income\", b.monthly_income);\n    output += section(\"Annual Income\", b.annual_income);\n    output += section(\"Tax Payment\", b.tax_payment);\n    output += section(\"Clients\", b.clients);\n    output += section(\"Materials / Needs / Wants\", b.materials_needs_wants);\n    output += section(\"Workers Needed\", b.workers_needed);\n    output += section(\"Tech Needed\", b.tech_needed);\n    output += section(\"Estimated Time to Fame\", b.time_to_fame);\n    output += section(\"Global Expansion Strategy\", b.global_expansion_strategy);\n  });\n}\n\noutput += section(\"💡 Convincing Points\", data[\"convincing point\"]);\n\nreturn [{ json: { text: output.trim() } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        64
+      ],
+      "id": "859a0436-1744-4959-ba0f-85734fe2010f",
+      "name": "Code",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "public": true,
+        "options": {
+          "title": "Welcome to Santona Your Ai intelligence Ai Analyst",
+          "customCss": ":root {\n  /* Colors */\n  --chat--color-primary: #2563eb; /* Tailwind blue-600 */\n  --chat--color-primary-shade-50: #1d4ed8;\n  --chat--color-primary-shade-100: #1e40af;\n  --chat--color-secondary: #10b981; /* Tailwind emerald-500 */\n  --chat--color-secondary-shade-50: #059669;\n  --chat--color-white: #f3f4f6; /* changed from #ffffff to softer light gray */\n  --chat--color-light: #1f2937; /* slate-800 dark background */\n  --chat--color-light-shade-50: #374151; /* slate-700 */\n  --chat--color-light-shade-100: #4b5563; /* slate-600 */\n  --chat--color-medium: #9ca3af;\n  --chat--color-dark: #f9fafb; /* text becomes near-white */\n  --chat--color-disabled: #6b7280; /* dim gray */\n  --chat--color-typing: #d1d5db; /* light gray typing dots */\n\n  /* Base Layout */\n  --chat--spacing: 1rem;\n  --chat--border-radius: 0.75rem;\n  --chat--transition-duration: 0.2s;\n  --chat--font-family: 'Inter', 'Segoe UI', Roboto, Oxygen-Sans, Ubuntu, Cantarell, 'Helvetica Neue', sans-serif;\n\n  /* Window */\n  --chat--window--width: 420px;\n  --chat--window--height: 640px;\n  --chat--window--bottom: var(--chat--spacing);\n  --chat--window--right: var(--chat--spacing);\n  --chat--window--z-index: 9999;\n  --chat--window--border: 1px solid var(--chat--color-light-shade-50);\n  --chat--window--border-radius: 1rem;\n  --chat--window--margin-bottom: var(--chat--spacing);\n\n  /* Header */\n  --chat--header--padding: 1.25rem;\n  --chat--header--background: var(--chat--color-primary);\n  --chat--header--color: var(--chat--color-white);\n  --chat--heading--font-size: 1.5rem;\n  --chat--subtitle--font-size: 0.9rem;\n  --chat--subtitle--line-height: 1.6;\n\n  /* Messages */\n  --chat--message--font-size: 1rem;\n  --chat--message--padding: 0.75rem 1rem;\n  --chat--message--border-radius: 1rem;\n  --chat--message-line-height: 1.5;\n  --chat--message--margin-bottom: 0.75rem;\n  --chat--message--bot--background: #374151; /* slate-700 */\n  --chat--message--bot--color: var(--chat--color-white);\n  --chat--message--user--background: var(--chat--color-primary);\n  --chat--message--user--color: var(--chat--color-white);\n  --chat--message--pre--background: rgba(255, 255, 255, 0.08);\n  --chat--messages-list--padding: var(--chat--spacing);\n\n  /* Toggle Button */\n  --chat--toggle--size: 56px;\n  --chat--toggle--background: var(--chat--color-primary);\n  --chat--toggle--hover--background: var(--chat--color-primary-shade-50);\n  --chat--toggle--active--background: var(--chat--color-primary-shade-100);\n  --chat--toggle--color: var(--chat--color-white);\n\n  /* Input Area */\n  --chat--textarea--height: 52px;\n  --chat--textarea--max-height: 20rem;\n  --chat--input--font-size: 1rem;\n  --chat--input--border: 1px solid var(--chat--color-light-shade-100);\n  --chat--input--border-radius: 0.75rem;\n  --chat--input--padding: 0.8rem 1rem;\n  --chat--input--background: #111827; /* slate-900 */\n  --chat--input--text-color: var(--chat--color-white);\n  --chat--input--placeholder--font-size: 0.95rem;\n  --chat--input--border-active: 1px solid var(--chat--color-primary);\n\n  /* Buttons */\n  --chat--button--color: var(--chat--color-white);\n  --chat--button--background: var(--chat--color-secondary);\n  --chat--button--padding: 0.6rem 1.2rem;\n  --chat--button--border-radius: 0.75rem;\n  --chat--button--hover--background: var(--chat--color-secondary-shade-50);\n\n  /* Send & File Buttons */\n  --chat--input--send--button--background: var(--chat--color-primary);\n  --chat--input--send--button--color: var(--chat--color-white);\n  --chat--input--send--button--background-hover: var(--chat--color-primary-shade-50);\n  --chat--input--file--button--background: #1f2937; /* dark */\n  --chat--input--file--button--color: var(--chat--color-secondary);\n  --chat--input--file--button--background-hover: #374151;\n\n  /* Body & Footer */\n  --chat--body--background: #111827; /* darkest slate */\n  --chat--footer--background: #1f2937;\n  --chat--footer--color: var(--chat--color-white);\n}\n\n/* Subtle shadow on bubbles */\n.chat-message {\n  max-width: 75%;\n  box-shadow: 0 2px 6px rgba(0,0,0,0.25);\n}\n",
+          "responseMode": "lastNode"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -192,
+        64
+      ],
+      "id": "05fd24f3-d7ee-4a40-b9b2-1a7c968ab455",
+      "name": "When chat message received",
+      "webhookId": "4028275b-92d8-4df2-9a19-940ca4bb3937"
+    }
+  ],
+  "connections": {
+    "Language Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Intent Extractor",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Intel Analyst",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Listener": {
+      "main": [
+        [
+          {
+            "node": "Intent Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intent Extractor": {
+      "main": [
+        [
+          {
+            "node": "Query Builder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query Builder": {
+      "main": [
+        [
+          {
+            "node": "News Fetcher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Fetcher": {
+      "main": [
+        [
+          {
+            "node": "RSS Parser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Parser": {
+      "main": [
+        [
+          {
+            "node": "Article Cleaner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Article Cleaner": {
+      "main": [
+        [
+          {
+            "node": "News Aggregator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Aggregator": {
+      "main": [
+        [
+          {
+            "node": "Intel Analyst",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Intel Analyst": {
+      "main": [
+        [
+          {
+            "node": "JSON Sanitizer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "JSON Sanitizer": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        []
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Intent Extractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "7d5c6f97f4db4f8d995f9ab501d01bae4bb41e2b8aa4735db242d86cecaa682e"
+  }
+}
