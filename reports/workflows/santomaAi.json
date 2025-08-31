@@ -1,6 +1,6 @@
 {
-  "nodes": [
-    {
+   "nodes": [
+     {
       "parameters": {
         "model": "ai21/jamba-mini-1.7",
         "options": {}
